@@ -1,12 +1,13 @@
 FROM golang:1.24-alpine AS builder
 
+RUN apk add --no-cache gcc musl-dev
+
 WORKDIR /build
 COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-# Build statically with nocgo to ensure compatibility across environments
-RUN CGO_ENABLED=0 go build -tags nocgo -o /matrix-persona-bridge ./cmd/matrix-persona-bridge
+RUN go build -o /matrix-persona-bridge ./cmd/matrix-persona-bridge
 
 FROM alpine:latest
 RUN apk add --no-cache ca-certificates
