@@ -10,10 +10,6 @@ import (
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/hlog"
-	"github.com/twilio/twilio-go"
-	tclient "github.com/twilio/twilio-go/client"
-	openapi "github.com/twilio/twilio-go/rest/api/v2010"
-	"github.com/twilio/twilio-go/twiml"
 	"go.mau.fi/util/configupgrade"
 	"go.mau.fi/util/exhttp"
 	"go.mau.fi/util/ptr"
@@ -86,23 +82,23 @@ func (tc *TwilioConnector) ReceiveMessage(w http.ResponseWriter, r *http.Request
 	client := login.Client.(*TwilioClient)
 
 	// Now that we have the client, validate the request.
-	if !client.RequestValidator.Validate(client.GetWebhookURL(), params, sig) {
+	/*if !client.RequestValidator.Validate(client.GetWebhookURL(), params, sig) {
 		w.WriteHeader(http.StatusForbidden)
 		_, _ = w.Write([]byte("Invalid signature\n"))
 		return
-	}
+	}*/
 
 	// Pass the request to the client for handling. This is where everything actually happens.
 	client.HandleWebhook(r.Context(), params)
 
 	// We don't want to respond immediately, so just send a blank TwiML response.
-	twimlResult, err := twiml.Messages(nil)
+	//twimlResult, err := twiml.Messages(nil)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 	} else {
 		w.Header().Set("Content-Type", "text/xml")
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(twimlResult))
+		//_, _ = w.Write([]byte(twimlResult))
 	}
 }
 
@@ -149,8 +145,8 @@ type UserLoginMetadata struct {
 }
 
 func (tc *TwilioConnector) LoadUserLogin(ctx context.Context, login *bridgev2.UserLogin) error {
-	meta := login.Metadata.(*UserLoginMetadata)
-	restClient := twilio.NewRestClientWithParams(twilio.ClientParams{
+	//meta := login.Metadata.(*UserLoginMetadata)
+	/*restClient := twilio.NewRestClientWithParams(twilio.ClientParams{
 		Username:   meta.AccountSID,
 		Password:   meta.AuthToken,
 		AccountSid: meta.AccountSID,
@@ -160,22 +156,22 @@ func (tc *TwilioConnector) LoadUserLogin(ctx context.Context, login *bridgev2.Us
 		UserLogin:        login,
 		Twilio:           restClient,
 		RequestValidator: validator,
-	}
+	}*/
 	return nil
 }
 
 type TwilioClient struct {
-	UserLogin        *bridgev2.UserLogin
-	Twilio           *twilio.RestClient
-	RequestValidator tclient.RequestValidator
-	TokenValidated   bool
+	UserLogin *bridgev2.UserLogin
+	//Twilio           *twilio.RestClient
+	//RequestValidator tclient.RequestValidator
+	TokenValidated bool
 }
 
 var _ bridgev2.NetworkAPI = (*TwilioClient)(nil)
 
 func (tc *TwilioClient) Connect(ctx context.Context) {
-	phoneNumbers, err := tc.Twilio.Api.ListIncomingPhoneNumber(nil)
-	if err != nil {
+	//phoneNumbers, err := tc.Twilio.Api.ListIncomingPhoneNumber(nil)
+	/*if err != nil {
 		tc.UserLogin.BridgeState.Send(status.BridgeState{
 			StateEvent: status.StateBadCredentials,
 			Error:      "twilio-api-error",
@@ -185,15 +181,15 @@ func (tc *TwilioClient) Connect(ctx context.Context) {
 			},
 		})
 		return
-	}
+	}*/
 	meta := tc.UserLogin.Metadata.(*UserLoginMetadata)
 	var numberFound bool
-	for _, number := range phoneNumbers {
+	/*for _, number := range phoneNumbers {
 		if number.PhoneNumber != nil && *number.PhoneNumber == meta.Phone {
 			numberFound = true
 			break
 		}
-	}
+	}*/
 	if !numberFound {
 		tc.UserLogin.BridgeState.Send(status.BridgeState{
 			StateEvent: status.StateBadCredentials,
@@ -313,18 +309,18 @@ func (tc *TwilioClient) convertMessage(ctx context.Context, portal *bridgev2.Por
 }
 
 func (tc *TwilioClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.MatrixMessage) (message *bridgev2.MatrixMessageResponse, err error) {
-	resp, err := tc.Twilio.Api.CreateMessage(&openapi.CreateMessageParams{
+	/*resp, err := tc.Twilio.Api.CreateMessage(&openapi.CreateMessageParams{
 		To:   ptr.Ptr(fmt.Sprintf("+%s", msg.Portal.ID)),
 		From: ptr.Ptr(tc.UserLogin.Metadata.(*UserLoginMetadata).Phone),
 		Body: ptr.Ptr(msg.Content.Body),
-	})
+	})*/
 	if err != nil {
 		return nil, err
 	}
 	return &bridgev2.MatrixMessageResponse{
 		DB: &database.Message{
-			ID:       networkid.MessageID(*resp.Sid),
-			SenderID: makeUserID(*resp.From),
+			//ID:       networkid.MessageID(*resp.Sid),
+			//SenderID: makeUserID(*resp.From),
 		},
 	}, nil
 }
@@ -379,8 +375,8 @@ func (tc *TwilioConnector) CreateLogin(ctx context.Context, user *bridgev2.User,
 }
 
 type TwilioLogin struct {
-	User         *bridgev2.User
-	Client       *twilio.RestClient
+	User *bridgev2.User
+	//Client       *twilio.RestClient
 	PhoneNumbers []twilioPhoneNumber
 	AccountSID   string
 	AuthToken    string
@@ -413,11 +409,11 @@ func (tl *TwilioLogin) Start(ctx context.Context) (*bridgev2.LoginStep, error) {
 }
 
 func (tl *TwilioLogin) SubmitUserInput(ctx context.Context, input map[string]string) (*bridgev2.LoginStep, error) {
-	if tl.Client == nil {
-		return tl.submitAPIKeys(ctx, input)
-	} else {
-		return tl.submitChosenPhoneNumber(ctx, input)
-	}
+	//if tl.Client == nil {
+	return tl.submitAPIKeys(ctx, input)
+	//} else {
+	//return tl.submitChosenPhoneNumber(ctx, input)
+	//}
 }
 
 type twilioPhoneNumber struct {
@@ -429,18 +425,18 @@ type twilioPhoneNumber struct {
 func (tl *TwilioLogin) submitAPIKeys(ctx context.Context, input map[string]string) (*bridgev2.LoginStep, error) {
 	tl.AccountSID = input["account_sid"]
 	tl.AuthToken = input["auth_token"]
-	twilioClient := twilio.NewRestClientWithParams(twilio.ClientParams{
+	/*twilioClient := twilio.NewRestClientWithParams(twilio.ClientParams{
 		Username:   tl.AccountSID,
 		Password:   tl.AuthToken,
 		AccountSid: tl.AccountSID,
-	})
+	})*/
 	// Get the list of phone numbers. This doubles as a way to verify the credentials are valid.
-	phoneNumbers, err := twilioClient.Api.ListIncomingPhoneNumber(nil)
-	if err != nil {
+	//phoneNumbers, err := twilioClient.Api.ListIncomingPhoneNumber(nil)
+	/*if err != nil {
 		return nil, fmt.Errorf("failed to list phone numbers: %w", err)
-	}
-	var numbers []twilioPhoneNumber
-	for _, number := range phoneNumbers {
+	}*/
+	//var numbers []twilioPhoneNumber
+	/*for _, number := range phoneNumbers {
 		if number.Status == nil || number.PhoneNumber == nil || *number.Status != "in-use" {
 			continue
 		}
@@ -449,14 +445,14 @@ func (tl *TwilioLogin) submitAPIKeys(ctx context.Context, input map[string]strin
 			Number:       *number.PhoneNumber,
 			PrettyNumber: *number.FriendlyName,
 		})
-	}
-	tl.Client = twilioClient
-	tl.PhoneNumbers = numbers
-	if len(numbers) == 0 {
-		return nil, fmt.Errorf("no active phone numbers found")
-	} else if len(numbers) == 1 {
-		return tl.finishLogin(ctx, numbers[0])
-	} else {
+	}*/
+	//tl.Client = twilioClient
+	//tl.PhoneNumbers = numbers
+	//if len(numbers) == 0 {
+	return nil, fmt.Errorf("no active phone numbers found")
+	//} else if len(numbers) == 1 {
+	//return tl.finishLogin(ctx, numbers[0])
+	/*} else {
 		phoneNumberList := make([]string, len(numbers))
 		for i, number := range numbers {
 			phoneNumberList[i] = fmt.Sprintf("* %s", number.Number)
@@ -473,7 +469,7 @@ func (tl *TwilioLogin) submitAPIKeys(ctx context.Context, input map[string]strin
 				}},
 			},
 		}, nil
-	}
+	}*/
 }
 
 func (tl *TwilioLogin) submitChosenPhoneNumber(ctx context.Context, input map[string]string) (*bridgev2.LoginStep, error) {
@@ -501,9 +497,7 @@ func (tl *TwilioLogin) finishLogin(ctx context.Context, phoneNumber twilioPhoneN
 	}, &bridgev2.NewLoginParams{
 		LoadUserLogin: func(ctx context.Context, login *bridgev2.UserLogin) error {
 			login.Client = &TwilioClient{
-				UserLogin:        login,
-				Twilio:           tl.Client,
-				RequestValidator: tclient.NewRequestValidator(tl.AuthToken),
+				UserLogin: login,
 			}
 			return nil
 		},
@@ -511,15 +505,15 @@ func (tl *TwilioLogin) finishLogin(ctx context.Context, phoneNumber twilioPhoneN
 	if err != nil {
 		return nil, err
 	}
-	tc := ul.Client.(*TwilioClient)
+	//tc := ul.Client.(*TwilioClient)
 	// In addition to creating the UserLogin, we'll also want to set the webhook URL for the phone number.
-	_, err = tc.Twilio.Api.UpdateIncomingPhoneNumber(phoneNumber.SID, &openapi.UpdateIncomingPhoneNumberParams{
+	/*_, err = tc.Twilio.Api.UpdateIncomingPhoneNumber(phoneNumber.SID, &openapi.UpdateIncomingPhoneNumberParams{
 		SmsMethod: ptr.Ptr(http.MethodPost),
 		SmsUrl:    ptr.Ptr(tc.GetWebhookURL()),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to set webhook URL for phone number: %w", err)
-	}
+	})*/
+	//if err != nil {
+	//return nil, fmt.Errorf("failed to set webhook URL for phone number: %w", err)
+	//}
 	// Finally, return the special complete step indicating the login was successful.
 	// It doesn't have any params other than the UserLogin we just created.
 	return &bridgev2.LoginStep{

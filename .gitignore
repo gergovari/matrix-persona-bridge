@@ -5,5 +5,5 @@
 *.db*
 *.log*
 
-/mautrix-twilio
+/matrix-persona-bridge
 /start
