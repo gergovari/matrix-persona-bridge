@@ -10,7 +10,7 @@ COPY . .
 RUN go build -o /matrix-persona-bridge ./cmd/matrix-persona-bridge
 
 FROM alpine:latest
-RUN apk add --no-cache ca-certificates
+RUN apk add --no-cache ca-certificates olm
 
 WORKDIR /data
 COPY --from=builder /matrix-persona-bridge /usr/local/bin/matrix-persona-bridge
