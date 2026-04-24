@@ -1,6 +1,6 @@
 # Matrix Persona Webhook Bridge
 
-A generic, highly flexible Application Service bridge that turns Webhooks into fully-featured Matrix users ("Personas"). Built on `mautrix-go` / `bridgev2`, this bridge allows your external services (like n8n, Zapier, or custom backends) to transparently control Matrix accounts and listen to all room events.
+A generic, highly flexible Application Service bridge that turns Webhooks into fully-featured Matrix users ("Personas"). Built on `mautrix-go` / `bridgev2`, this bridge allows your external services (like Zapier, Make, or custom backends) to transparently control Matrix accounts and listen to all room events.
 
 ## Architecture
 
@@ -10,7 +10,7 @@ This is **not** a standard "Portal" bridge (like bridging Telegram/WhatsApp chat
 
 ### Security First
 
-The bot's Matrix ID (e.g. `@webhook_n8n-bot-1:homeserver.org`) is publicly visible to anyone in the room. To prevent malicious actors from spoofing requests:
+The bot's Matrix ID (e.g. `@webhook_bot-1:homeserver.org`) is publicly visible to anyone in the room. To prevent malicious actors from spoofing requests:
 1. **Unguessable URLs**: The inbound webhook URL uses a randomly generated 32-character token.
 2. **Mandatory Headers**: The inbound request must include an auto-generated security header with a specific token.
 
@@ -91,8 +91,8 @@ Open a direct chat with the bridge bot and type:
 login
 ```
 The bot will guide you through the `Create Persona` flow:
-1. **Persona ID**: Give it an identifier (e.g., `n8n-1`). This will make the ghost's MXID `@webhook_n8n-1:yourdomain.com`.
-2. **Outbound Webhook URL**: Enter the URL of your webhook listener (e.g., `https://n8n.yourdomain.com/webhook/matrix-in`).
+1. **Persona ID**: Give it an identifier (e.g., `bot-1`). This will make the ghost's MXID `@webhook_bot-1:yourdomain.com`.
+2. **Outbound Webhook URL**: Enter the URL of your webhook listener (e.g., `https://api.yourdomain.com/webhook/matrix-in`).
 
 ### Secure Credentials Provided
 
@@ -111,7 +111,7 @@ Persona created successfully!
 
 ## Webhook Payloads
 
-### 1. Inbound Webhook (n8n -> Matrix)
+### 1. Inbound Webhook (Backend -> Matrix)
 
 To make your Persona act on Matrix, send a `POST` request to the **Inbound URL** provided during registration.
 
@@ -126,7 +126,7 @@ Content-Type: application/json
 {
   "action": "send_message",
   "room_id": "!xyzabc:yourdomain.com",
-  "text": "Hello from n8n!"
+  "text": "Hello from your webhook!"
 }
 ```
 
@@ -134,14 +134,14 @@ Content-Type: application/json
 - `send_message`: Sends text to the specified `room_id`.
 - `join_room`: Forces the Persona to join the specified `room_id`.
 
-### 2. Outbound Webhook (Matrix -> n8n)
+### 2. Outbound Webhook (Matrix -> Backend)
 
 Whenever a Matrix event occurs in a room where your Persona is present (or if the Persona is invited to a room), the bridge intercepts it and sends a `POST` request to your configured **Outbound Webhook URL**.
 
 **Body:**
 ```json
 {
-  "persona_id": "n8n-1",
+  "persona_id": "bot-1",
   "event": {
     "type": "m.room.message",
     "sender": "@someuser:yourdomain.com",

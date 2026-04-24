@@ -165,7 +165,7 @@ func (pl *PersonaLogin) Start(ctx context.Context) (*bridgev2.LoginStep, error) 
 				{
 					Type: bridgev2.LoginInputFieldTypeUsername,
 					ID:   "persona_id",
-					Name: "Persona ID (e.g., n8n-bot-1)",
+					Name: "Persona ID (e.g., bot-1)",
 				},
 				{
 					Type: bridgev2.LoginInputFieldTypeUsername,
