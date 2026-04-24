@@ -51,7 +51,7 @@ Before starting the bridge, you must generate the example configuration and the 
 
 ```bash
 # 1. Generate example config
-docker compose run --rm persona-bridge matrix-persona-bridge -g -e
+docker compose run --rm persona-bridge -g -e
 
 # 2. Edit the config.yaml generated in your ./persona-bridge-data directory.
 # Set:
@@ -62,7 +62,7 @@ docker compose run --rm persona-bridge matrix-persona-bridge -g -e
 # network.inbound.path: "/webhook"
 
 # 3. Generate the appservice registration file
-docker compose run --rm persona-bridge matrix-persona-bridge -g
+docker compose run --rm persona-bridge -g
 
 # 4. Register the AppService with Synapse!
 # Edit your Synapse homeserver.yaml and add the registration file path:

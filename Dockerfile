@@ -15,4 +15,4 @@ WORKDIR /data
 COPY --from=builder /matrix-persona-bridge /usr/local/bin/matrix-persona-bridge
 
 # The app writes/reads config.yaml and registration.yaml from the working directory
-CMD ["matrix-persona-bridge"]
+ENTRYPOINT ["/usr/local/bin/matrix-persona-bridge"]
