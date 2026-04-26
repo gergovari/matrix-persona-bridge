@@ -432,10 +432,37 @@ func (c *WebhookConnector) handleSendMessage(ctx context.Context, w http.Respons
 
 	if payload.ReplyTo != "" || payload.ThreadRoot != "" {
 		content.RelatesTo = &event.RelatesTo{}
+		if payload.ReplyTo != "" {
+			origEventID := id.EventID(payload.ReplyTo)
+			content.RelatesTo.SetReplyTo(origEventID)
+
+			origEvent, err := ghost.Intent.GetEvent(ctx, roomID, origEventID)
+			if err == nil && origEvent != nil {
+				if content.Mentions == nil {
+					content.Mentions = &event.Mentions{}
+				}
+				content.Mentions.Add(origEvent.Sender)
+
+				origBody := "Attachment"
+				if origEvent.Content.Parsed != nil {
+					if origContent, ok := origEvent.Content.Parsed.(*event.MessageEventContent); ok {
+						origBody = origContent.Body
+						if origBody == "" {
+							origBody = "Attachment"
+						}
+					}
+				}
+
+				fallbackHTML := fmt.Sprintf(`<mx-reply><blockquote><a href="https://matrix.to/#/%s/%s">In reply to</a> <a href="https://matrix.to/#/%s">%s</a><br>%s</blockquote></mx-reply>`, roomID, origEventID, origEvent.Sender, origEvent.Sender, event.TextToHTML(origBody))
+
+				content.EnsureHasHTML()
+				content.FormattedBody = fallbackHTML + content.FormattedBody
+				content.Body = fmt.Sprintf("> <%s> %s\n\n%s", origEvent.Sender, strings.ReplaceAll(origBody, "\n", "\n> "), content.Body)
+			}
+		}
+
 		if payload.ThreadRoot != "" {
 			content.RelatesTo.SetThread(id.EventID(payload.ThreadRoot), id.EventID(payload.ReplyTo))
-		} else if payload.ReplyTo != "" {
-			content.RelatesTo.SetReplyTo(id.EventID(payload.ReplyTo))
 		}
 	}
 
@@ -449,6 +476,7 @@ func (c *WebhookConnector) handleSendMessage(ctx context.Context, w http.Respons
 
 func (c *WebhookConnector) handleSendFile(ctx context.Context, w http.ResponseWriter, ghost *bridgev2.Ghost, roomID id.RoomID, payload *InboundWebhookPayload) {
 	var contentURI id.ContentURIString
+	var encryptedFile *event.EncryptedFileInfo
 
 	if payload.FileURL != "" {
 		// Use pre-uploaded mxc:// URL
@@ -468,12 +496,13 @@ func (c *WebhookConnector) handleSendFile(ctx context.Context, w http.ResponseWr
 		if mime == "" {
 			mime = "application/octet-stream"
 		}
-		uploadedURL, _, uploadErr := ghost.Intent.UploadMedia(ctx, roomID, data, payload.FileName, mime)
+		uploadedURL, encFile, uploadErr := ghost.Intent.UploadMedia(ctx, roomID, data, payload.FileName, mime)
 		if uploadErr != nil {
 			c.replyJSON(w, http.StatusInternalServerError, InboundWebhookResponse{Error: fmt.Sprintf("Failed to upload file: %v", uploadErr)})
 			return
 		}
 		contentURI = uploadedURL
+		encryptedFile = encFile
 	} else {
 		c.replyJSON(w, http.StatusBadRequest, InboundWebhookResponse{Error: "Either file_url or file_data is required"})
 		return
@@ -503,19 +532,50 @@ func (c *WebhookConnector) handleSendFile(ctx context.Context, w http.ResponseWr
 		MsgType:  msgType,
 		Body:     body,
 		FileName: fileName,
-		URL:      contentURI,
 		Info: &event.FileInfo{
 			MimeType: payload.FileMIME,
 			Size:     payload.FileSize,
 		},
 	}
+	if encryptedFile != nil {
+		content.File = encryptedFile
+	} else {
+		content.URL = contentURI
+	}
 
 	if payload.ReplyTo != "" || payload.ThreadRoot != "" {
 		content.RelatesTo = &event.RelatesTo{}
+		if payload.ReplyTo != "" {
+			origEventID := id.EventID(payload.ReplyTo)
+			content.RelatesTo.SetReplyTo(origEventID)
+
+			origEvent, err := ghost.Intent.GetEvent(ctx, roomID, origEventID)
+			if err == nil && origEvent != nil {
+				if content.Mentions == nil {
+					content.Mentions = &event.Mentions{}
+				}
+				content.Mentions.Add(origEvent.Sender)
+
+				origBody := "Attachment"
+				if origEvent.Content.Parsed != nil {
+					if origContent, ok := origEvent.Content.Parsed.(*event.MessageEventContent); ok {
+						origBody = origContent.Body
+						if origBody == "" {
+							origBody = "Attachment"
+						}
+					}
+				}
+
+				fallbackHTML := fmt.Sprintf(`<mx-reply><blockquote><a href="https://matrix.to/#/%s/%s">In reply to</a> <a href="https://matrix.to/#/%s">%s</a><br>%s</blockquote></mx-reply>`, roomID, origEventID, origEvent.Sender, origEvent.Sender, event.TextToHTML(origBody))
+
+				content.EnsureHasHTML()
+				content.FormattedBody = fallbackHTML + content.FormattedBody
+				content.Body = fmt.Sprintf("> <%s> %s\n\n%s", origEvent.Sender, strings.ReplaceAll(origBody, "\n", "\n> "), content.Body)
+			}
+		}
+
 		if payload.ThreadRoot != "" {
 			content.RelatesTo.SetThread(id.EventID(payload.ThreadRoot), id.EventID(payload.ReplyTo))
-		} else if payload.ReplyTo != "" {
-			content.RelatesTo.SetReplyTo(id.EventID(payload.ReplyTo))
 		}
 	}
 
