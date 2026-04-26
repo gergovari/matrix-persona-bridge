@@ -109,11 +109,16 @@ func (c *WebhookConnector) GetBridgeInfoVersion() (info, capabilities int) {
 
 func (c *WebhookConnector) GetConfig() (example string, data any, upgrader configupgrade.Upgrader) {
 	return `
+# The public URL where the bridge is reachable.
 network_url: https://webhook.local
 inbound:
   port: 8080
   path: /webhook
-`, &c.Config, configupgrade.SimpleUpgrader(func(helper configupgrade.Helper) {})
+`, &c.Config, configupgrade.SimpleUpgrader(func(helper configupgrade.Helper) {
+		helper.Copy(configupgrade.Str, "network_url")
+		helper.Copy(configupgrade.Int, "inbound", "port")
+		helper.Copy(configupgrade.Str, "inbound", "path")
+	})
 }
 
 func (c *WebhookConnector) GetDBMetaTypes() database.MetaTypes {
