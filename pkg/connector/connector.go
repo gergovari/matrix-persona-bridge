@@ -12,6 +12,7 @@ import (
 	"go.mau.fi/util/configupgrade"
 	"go.mau.fi/util/random"
 	"maunium.net/go/mautrix/bridgev2"
+	"maunium.net/go/mautrix/bridgev2/commands"
 	"maunium.net/go/mautrix/bridgev2/database"
 	"maunium.net/go/mautrix/bridgev2/matrix"
 	"maunium.net/go/mautrix/bridgev2/networkid"
@@ -28,10 +29,10 @@ type Config struct {
 }
 
 type UserLoginMetadata struct {
-	OutboundURL  string `json:"outbound_url"`
-	InboundToken string `json:"inbound_token"`
-	HeaderName   string `json:"header_name"`
-	HeaderValue  string `json:"header_value"`
+	OutboundURLs []string `json:"outbound_urls"`
+	InboundToken string   `json:"inbound_token"`
+	HeaderName   string   `json:"header_name"`
+	HeaderValue  string   `json:"header_value"`
 }
 
 type WebhookConnector struct {
@@ -149,28 +150,22 @@ func (c *WebhookConnector) CreateLogin(ctx context.Context, user *bridgev2.User,
 }
 
 type PersonaLogin struct {
-	User        *bridgev2.User
-	Connector   *WebhookConnector
-	PersonaID   string
-	OutboundURL string
+	User      *bridgev2.User
+	Connector *WebhookConnector
+	PersonaID string
 }
 
 func (pl *PersonaLogin) Start(ctx context.Context) (*bridgev2.LoginStep, error) {
 	return &bridgev2.LoginStep{
 		Type:         bridgev2.LoginStepTypeUserInput,
 		StepID:       "persona-details",
-		Instructions: "Enter details for the new Persona",
+		Instructions: "Enter an ID for the new Persona. You can add outbound URLs later with the `add-outbound` command.",
 		UserInputParams: &bridgev2.LoginUserInputParams{
 			Fields: []bridgev2.LoginInputDataField{
 				{
 					Type: bridgev2.LoginInputFieldTypeUsername,
 					ID:   "persona_id",
 					Name: "Persona ID (e.g., bot-1)",
-				},
-				{
-					Type: bridgev2.LoginInputFieldTypeUsername,
-					ID:   "outbound_url",
-					Name: "Outbound Webhook URL",
 				},
 			},
 		},
@@ -179,7 +174,6 @@ func (pl *PersonaLogin) Start(ctx context.Context) (*bridgev2.LoginStep, error) 
 
 func (pl *PersonaLogin) SubmitUserInput(ctx context.Context, input map[string]string) (*bridgev2.LoginStep, error) {
 	pl.PersonaID = input["persona_id"]
-	pl.OutboundURL = input["outbound_url"]
 
 	inboundToken := random.String(32) // Generate a secure 32-character random token
 	headerName := "X-Webhook-Token"
@@ -189,7 +183,7 @@ func (pl *PersonaLogin) SubmitUserInput(ctx context.Context, input map[string]st
 		ID:         networkid.UserLoginID(pl.PersonaID),
 		RemoteName: pl.PersonaID,
 		Metadata: &UserLoginMetadata{
-			OutboundURL:  pl.OutboundURL,
+			OutboundURLs: []string{},
 			InboundToken: inboundToken,
 			HeaderName:   headerName,
 			HeaderValue:  headerValue,
@@ -204,7 +198,7 @@ func (pl *PersonaLogin) SubmitUserInput(ctx context.Context, input map[string]st
 	return &bridgev2.LoginStep{
 		Type:         bridgev2.LoginStepTypeComplete,
 		StepID:       "complete",
-		Instructions: fmt.Sprintf("Persona created successfully!\n\n**Keep these details secret:**\n- **Inbound URL:** `http://<host>:%d%s/%s`\n- **Required Header Name:** `%s`\n- **Required Header Token:** `%s`\n\nConfigure your webhook backend to send this header with every request.", pl.Connector.Config.Inbound.Port, pl.Connector.Config.Inbound.Path, inboundToken, headerName, headerValue),
+		Instructions: fmt.Sprintf("Persona created successfully!\n\n**Keep these details secret:**\n- **Inbound URL:** `http://<host>:%d%s/%s`\n- **Required Header Name:** `%s`\n- **Required Header Token:** `%s`\n\nUse `add-outbound %s <url>` to add outbound webhook URLs.", pl.Connector.Config.Inbound.Port, pl.Connector.Config.Inbound.Path, inboundToken, headerName, headerValue, pl.PersonaID),
 		CompleteParams: &bridgev2.LoginCompleteParams{
 			UserLoginID: ul.ID,
 			UserLogin:   ul,
@@ -335,7 +329,7 @@ type OutboundPayload struct {
 
 func (c *WebhookConnector) sendOutbound(login *bridgev2.UserLogin, evt *event.Event) {
 	meta, ok := login.Metadata.(*UserLoginMetadata)
-	if !ok || meta.OutboundURL == "" {
+	if !ok || len(meta.OutboundURLs) == 0 {
 		return
 	}
 
@@ -344,12 +338,25 @@ func (c *WebhookConnector) sendOutbound(login *bridgev2.UserLogin, evt *event.Ev
 		Event:     evt,
 	}
 	data, _ := json.Marshal(payload)
-	resp, err := http.Post(meta.OutboundURL, "application/json", bytes.NewReader(data))
-	if err != nil {
-		c.Bridge.Log.Err(err).Str("persona", string(login.ID)).Msg("Failed to send outbound webhook")
-		return
+
+	for _, url := range meta.OutboundURLs {
+		req, err := http.NewRequest("POST", url, bytes.NewReader(data))
+		if err != nil {
+			c.Bridge.Log.Err(err).Str("persona", string(login.ID)).Str("url", url).Msg("Failed to create outbound request")
+			continue
+		}
+		req.Header.Set("Content-Type", "application/json")
+		if meta.HeaderName != "" {
+			req.Header.Set(meta.HeaderName, meta.HeaderValue)
+		}
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			c.Bridge.Log.Err(err).Str("persona", string(login.ID)).Str("url", url).Msg("Failed to send outbound webhook")
+			continue
+		}
+		resp.Body.Close()
 	}
-	resp.Body.Close()
 }
 
 // Dummy WebhookAPI implementation to satisfy bridgev2
@@ -366,3 +373,183 @@ func (a *WebhookAPI) GetCapabilities(ctx context.Context, portal *bridgev2.Porta
 func (a *WebhookAPI) HandleMatrixMessage(ctx context.Context, msg *bridgev2.MatrixMessage) (*bridgev2.MatrixMessageResponse, error) { return nil, nil }
 func (a *WebhookAPI) GetChatInfo(ctx context.Context, portal *bridgev2.Portal) (*bridgev2.ChatInfo, error) { return &bridgev2.ChatInfo{}, nil }
 func (a *WebhookAPI) GetUserInfo(ctx context.Context, ghost *bridgev2.Ghost) (*bridgev2.UserInfo, error) { return &bridgev2.UserInfo{}, nil }
+
+// Bot commands for managing personas
+
+var CmdAddOutbound = &commands.FullHandler{
+	Func: func(ce *commands.Event) {
+		if len(ce.Args) < 2 {
+			ce.Reply("Usage: `add-outbound <persona_id> <url>`")
+			return
+		}
+		personaID := ce.Args[0]
+		url := ce.Args[1]
+
+		login, err := ce.Bridge.GetExistingUserLoginByID(ce.Ctx, networkid.UserLoginID(personaID))
+		if err != nil || login == nil {
+			ce.Reply("Persona `%s` not found.", personaID)
+			return
+		}
+
+		meta, ok := login.Metadata.(*UserLoginMetadata)
+		if !ok {
+			ce.Reply("Failed to read persona metadata.")
+			return
+		}
+
+		for _, existing := range meta.OutboundURLs {
+			if existing == url {
+				ce.Reply("URL already registered for persona `%s`.", personaID)
+				return
+			}
+		}
+
+		meta.OutboundURLs = append(meta.OutboundURLs, url)
+		err = login.Save(ce.Ctx)
+		if err != nil {
+			ce.Reply("Failed to save: %v", err)
+			return
+		}
+
+		ce.Reply("Added outbound URL to persona `%s`. Total URLs: %d", personaID, len(meta.OutboundURLs))
+	},
+	Name: "add-outbound",
+	Help: commands.HelpMeta{
+		Section:     commands.HelpSectionGeneral,
+		Description: "Add an outbound webhook URL to a persona",
+		Args:        "<persona_id> <url>",
+	},
+	RequiresAdmin: true,
+}
+
+var CmdRemoveOutbound = &commands.FullHandler{
+	Func: func(ce *commands.Event) {
+		if len(ce.Args) < 2 {
+			ce.Reply("Usage: `remove-outbound <persona_id> <url>`")
+			return
+		}
+		personaID := ce.Args[0]
+		url := ce.Args[1]
+
+		login, err := ce.Bridge.GetExistingUserLoginByID(ce.Ctx, networkid.UserLoginID(personaID))
+		if err != nil || login == nil {
+			ce.Reply("Persona `%s` not found.", personaID)
+			return
+		}
+
+		meta, ok := login.Metadata.(*UserLoginMetadata)
+		if !ok {
+			ce.Reply("Failed to read persona metadata.")
+			return
+		}
+
+		found := false
+		newURLs := make([]string, 0, len(meta.OutboundURLs))
+		for _, existing := range meta.OutboundURLs {
+			if existing == url {
+				found = true
+			} else {
+				newURLs = append(newURLs, existing)
+			}
+		}
+
+		if !found {
+			ce.Reply("URL not found for persona `%s`.", personaID)
+			return
+		}
+
+		meta.OutboundURLs = newURLs
+		err = login.Save(ce.Ctx)
+		if err != nil {
+			ce.Reply("Failed to save: %v", err)
+			return
+		}
+
+		ce.Reply("Removed outbound URL from persona `%s`. Remaining URLs: %d", personaID, len(meta.OutboundURLs))
+	},
+	Name: "remove-outbound",
+	Help: commands.HelpMeta{
+		Section:     commands.HelpSectionGeneral,
+		Description: "Remove an outbound webhook URL from a persona",
+		Args:        "<persona_id> <url>",
+	},
+	RequiresAdmin: true,
+}
+
+var CmdListOutbound = &commands.FullHandler{
+	Func: func(ce *commands.Event) {
+		if len(ce.Args) < 1 {
+			ce.Reply("Usage: `list-outbound <persona_id>`")
+			return
+		}
+		personaID := ce.Args[0]
+
+		login, err := ce.Bridge.GetExistingUserLoginByID(ce.Ctx, networkid.UserLoginID(personaID))
+		if err != nil || login == nil {
+			ce.Reply("Persona `%s` not found.", personaID)
+			return
+		}
+
+		meta, ok := login.Metadata.(*UserLoginMetadata)
+		if !ok {
+			ce.Reply("Failed to read persona metadata.")
+			return
+		}
+
+		if len(meta.OutboundURLs) == 0 {
+			ce.Reply("Persona `%s` has no outbound URLs configured.", personaID)
+			return
+		}
+
+		msg := fmt.Sprintf("Outbound URLs for persona `%s`:\n", personaID)
+		for i, url := range meta.OutboundURLs {
+			msg += fmt.Sprintf("%d. `%s`\n", i+1, url)
+		}
+		ce.Reply(msg)
+	},
+	Name: "list-outbound",
+	Help: commands.HelpMeta{
+		Section:     commands.HelpSectionGeneral,
+		Description: "List all outbound webhook URLs for a persona",
+		Args:        "<persona_id>",
+	},
+	RequiresAdmin: true,
+}
+
+var CmdSetDisplayName = &commands.FullHandler{
+	Func: func(ce *commands.Event) {
+		if len(ce.Args) < 2 {
+			ce.Reply("Usage: `set-displayname <persona_id> <name...>`")
+			return
+		}
+		personaID := ce.Args[0]
+		displayName := strings.Join(ce.Args[1:], " ")
+
+		login, err := ce.Bridge.GetExistingUserLoginByID(ce.Ctx, networkid.UserLoginID(personaID))
+		if err != nil || login == nil {
+			ce.Reply("Persona `%s` not found.", personaID)
+			return
+		}
+
+		ghost, err := ce.Bridge.GetGhostByID(ce.Ctx, networkid.UserID(login.ID))
+		if err != nil || ghost == nil {
+			ce.Reply("Ghost for persona `%s` not found.", personaID)
+			return
+		}
+
+		err = ghost.Intent.SetDisplayName(ce.Ctx, displayName)
+		if err != nil {
+			ce.Reply("Failed to set display name: %v", err)
+			return
+		}
+
+		ce.Reply("Display name for persona `%s` set to **%s**.", personaID, displayName)
+	},
+	Name: "set-displayname",
+	Help: commands.HelpMeta{
+		Section:     commands.HelpSectionGeneral,
+		Description: "Set the Matrix display name for a persona's ghost",
+		Args:        "<persona_id> <name...>",
+	},
+	RequiresAdmin: true,
+}

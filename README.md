@@ -5,7 +5,7 @@ A generic, highly flexible Application Service bridge that turns Webhooks into f
 ## Architecture
 
 This is **not** a standard "Portal" bridge (like bridging Telegram/WhatsApp chats into Matrix). Instead, this is a **Persona Bridge**:
-1. **Outbound (Matrix -> Webhook)**: The bridge hooks directly into the AppService Event Processor. Any event (messages, invites, state events) that your Persona witnesses is captured and forwarded as raw JSON directly to your Outbound Webhook.
+1. **Outbound (Matrix -> Webhook)**: The bridge hooks directly into the AppService Event Processor. Any event (messages, invites, state events) that your Persona witnesses is captured and forwarded as raw JSON to **all** configured Outbound Webhook URLs.
 2. **Inbound (Webhook -> Matrix)**: Your webhook backend can send commands (like `send_message` or `join_room`) via an HTTP POST request to a uniquely secure URL. The bridge dynamically controls the Persona's Matrix account to perform the action.
 
 ### Security First
@@ -13,6 +13,7 @@ This is **not** a standard "Portal" bridge (like bridging Telegram/WhatsApp chat
 The bot's Matrix ID (e.g. `@webhook_bot-1:homeserver.org`) is publicly visible to anyone in the room. To prevent malicious actors from spoofing requests:
 1. **Unguessable URLs**: The inbound webhook URL uses a randomly generated 32-character token.
 2. **Mandatory Headers**: The inbound request must include an auto-generated security header with a specific token.
+3. **Outbound Authentication**: All outbound webhook calls include the same `X-Webhook-Token` security header, allowing your backend to verify that events genuinely originate from the bridge.
 
 ---
 
@@ -92,7 +93,6 @@ login
 ```
 The bot will guide you through the `Create Persona` flow:
 1. **Persona ID**: Give it an identifier (e.g., `bot-1`). This will make the ghost's MXID `@webhook_bot-1:yourdomain.com`.
-2. **Outbound Webhook URL**: Enter the URL of your webhook listener (e.g., `https://api.yourdomain.com/webhook/matrix-in`).
 
 ### Secure Credentials Provided
 
@@ -105,6 +105,42 @@ Persona created successfully!
 - **Inbound URL:** http://<bridge-host>:8080/webhook/8fX2aB...
 - **Required Header Name:** X-Webhook-Token
 - **Required Header Token:** dJ8ks9...
+
+Use `add-outbound bot-1 <url>` to add outbound webhook URLs.
+```
+
+### Managing Outbound URLs
+
+Each persona can have **multiple outbound webhook URLs**. Every Matrix event the persona witnesses will be forwarded to **all** configured URLs simultaneously.
+
+**Add an outbound URL:**
+```text
+add-outbound <persona_id> <url>
+```
+Example:
+```text
+add-outbound bot-1 https://api.yourdomain.com/webhook/matrix-in
+```
+
+**Remove an outbound URL:**
+```text
+remove-outbound <persona_id> <url>
+```
+
+**List all outbound URLs:**
+```text
+list-outbound <persona_id>
+```
+
+### Setting Display Name
+
+Set a custom Matrix display name for a persona's ghost user:
+```text
+set-displayname <persona_id> <name...>
+```
+Example:
+```text
+set-displayname bot-1 My Awesome Bot
 ```
 
 ---
@@ -136,7 +172,13 @@ Content-Type: application/json
 
 ### 2. Outbound Webhook (Matrix -> Backend)
 
-Whenever a Matrix event occurs in a room where your Persona is present (or if the Persona is invited to a room), the bridge intercepts it and sends a `POST` request to your configured **Outbound Webhook URL**.
+Whenever a Matrix event occurs in a room where your Persona is present (or if the Persona is invited to a room), the bridge intercepts it and sends a `POST` request to **all** configured Outbound Webhook URLs.
+
+**Headers:**
+```http
+X-Webhook-Token: dJ8ks9...  <-- The same secret Header Token used for inbound
+Content-Type: application/json
+```
 
 **Body:**
 ```json
@@ -155,4 +197,22 @@ Whenever a Matrix event occurs in a room where your Persona is present (or if th
   }
 }
 ```
+
 *Note: The `event` payload is the raw, 100% native JSON directly from the Matrix Homeserver.*
+
+*Note: The outbound request includes the `X-Webhook-Token` header with the persona's security token, allowing your backend to authenticate the request.*
+
+---
+
+## Bot Command Reference
+
+All commands are sent as messages to the bridge bot in a direct chat. Admin privileges are required.
+
+| Command | Description |
+|---------|-------------|
+| `login` | Create a new Persona (interactive flow) |
+| `add-outbound <persona_id> <url>` | Add an outbound webhook URL to a persona |
+| `remove-outbound <persona_id> <url>` | Remove an outbound webhook URL from a persona |
+| `list-outbound <persona_id>` | List all configured outbound URLs for a persona |
+| `set-displayname <persona_id> <name...>` | Set the Matrix display name for a persona's ghost |
+| `help` | Show all available commands |

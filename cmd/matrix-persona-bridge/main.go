@@ -1,6 +1,7 @@
 package main
 
 import (
+	"maunium.net/go/mautrix/bridgev2/commands"
 	"maunium.net/go/mautrix/bridgev2/matrix/mxmain"
 
 	"github.com/gergovari/matrix-persona-bridge/pkg/connector"
@@ -19,6 +20,14 @@ func main() {
 		URL:         "https://github.com/gergovari/matrix-persona-bridge",
 		Version:     "0.0.1",
 		Connector:   &connector.WebhookConnector{},
+	}
+	m.PostInit = func() {
+		m.Bridge.Commands.(*commands.Processor).AddHandlers(
+			connector.CmdAddOutbound,
+			connector.CmdRemoveOutbound,
+			connector.CmdListOutbound,
+			connector.CmdSetDisplayName,
+		)
 	}
 	m.InitVersion(Tag, Commit, BuildTime)
 	m.Run()
