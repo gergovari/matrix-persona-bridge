@@ -595,3 +595,48 @@ var CmdSetDisplayName = &commands.FullHandler{
 	},
 	RequiresAdmin: true,
 }
+
+var CmdSetAvatar = &commands.FullHandler{
+	Func: func(ce *commands.Event) {
+		if len(ce.Args) < 2 {
+			ce.Reply("Usage: `set-avatar <persona_id> <mxc://...>`")
+			return
+		}
+		personaID := ce.Args[0]
+		avatarURL := ce.Args[1]
+
+		login, err := ce.Bridge.GetExistingUserLoginByID(ce.Ctx, networkid.UserLoginID(personaID))
+		if err != nil || login == nil {
+			ce.Reply("Persona `%s` not found.", personaID)
+			return
+		}
+
+		ghost, err := ce.Bridge.GetGhostByID(ce.Ctx, networkid.UserID(login.ID))
+		if err != nil || ghost == nil {
+			ce.Reply("Ghost for persona `%s` not found.", personaID)
+			return
+		}
+
+		parsedURL, err := id.ParseContentURI(avatarURL)
+		if err != nil {
+			ce.Reply("Invalid `mxc://` URL: %v", err)
+			return
+		}
+
+		err = ghost.Intent.SetAvatarURL(ce.Ctx, parsedURL)
+		if err != nil {
+			ce.Reply("Failed to set avatar: %v", err)
+			return
+		}
+
+		ce.Reply("Avatar for persona `%s` updated.", personaID)
+	},
+	Name: "set-avatar",
+	Help: commands.HelpMeta{
+		Section:     commands.HelpSectionGeneral,
+		Description: "Set the Matrix avatar for a persona's ghost (requires mxc:// URL)",
+		Args:        "<persona_id> <mxc://...>",
+	},
+	RequiresAdmin: true,
+}
+

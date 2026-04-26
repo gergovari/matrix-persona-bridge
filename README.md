@@ -149,6 +149,17 @@ Example:
 set-displayname bot-1 My Awesome Bot
 ```
 
+### Setting Avatar
+
+Set a custom Matrix avatar for a persona's ghost user. Upload an image to any Matrix room first, then use its `mxc://` URL:
+```text
+set-avatar <persona_id> <mxc://...>
+```
+Example:
+```text
+set-avatar bot-1 mxc://yourdomain.com/AbCdEfGhIjKl
+```
+
 ---
 
 ## Webhook Payloads
@@ -221,4 +232,5 @@ All commands are sent as messages to the bridge bot in a direct chat. Admin priv
 | `remove-outbound <persona_id> <url>` | Remove an outbound webhook URL from a persona |
 | `list-outbound <persona_id>` | List all configured outbound URLs for a persona |
 | `set-displayname <persona_id> <name...>` | Set the Matrix display name for a persona's ghost |
+| `set-avatar <persona_id> <mxc://...>` | Set the Matrix avatar for a persona's ghost |
 | `help` | Show all available commands |

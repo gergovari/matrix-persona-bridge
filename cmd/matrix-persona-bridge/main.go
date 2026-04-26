@@ -27,6 +27,7 @@ func main() {
 			connector.CmdRemoveOutbound,
 			connector.CmdListOutbound,
 			connector.CmdSetDisplayName,
+			connector.CmdSetAvatar,
 		)
 	}
 	m.InitVersion(Tag, Commit, BuildTime)
