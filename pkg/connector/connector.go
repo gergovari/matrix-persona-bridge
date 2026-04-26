@@ -384,7 +384,14 @@ func (a *WebhookAPI) IsLoggedIn() bool            { return true }
 func (a *WebhookAPI) LogoutRemote(ctx context.Context) {}
 func (a *WebhookAPI) IsThisUser(ctx context.Context, userID networkid.UserID) bool { return false }
 func (a *WebhookAPI) GetCapabilities(ctx context.Context, portal *bridgev2.Portal) *event.RoomFeatures { return &event.RoomFeatures{} }
-func (a *WebhookAPI) HandleMatrixMessage(ctx context.Context, msg *bridgev2.MatrixMessage) (*bridgev2.MatrixMessageResponse, error) { return nil, nil }
+func (a *WebhookAPI) HandleMatrixMessage(ctx context.Context, msg *bridgev2.MatrixMessage) (*bridgev2.MatrixMessageResponse, error) {
+	return &bridgev2.MatrixMessageResponse{
+		DB: &database.Message{
+			ID:        networkid.MessageID(msg.Event.ID),
+			SenderMXID: msg.Event.Sender,
+		},
+	}, nil
+}
 func (a *WebhookAPI) GetChatInfo(ctx context.Context, portal *bridgev2.Portal) (*bridgev2.ChatInfo, error) { return &bridgev2.ChatInfo{}, nil }
 func (a *WebhookAPI) GetUserInfo(ctx context.Context, ghost *bridgev2.Ghost) (*bridgev2.UserInfo, error) { return &bridgev2.UserInfo{}, nil }
 
