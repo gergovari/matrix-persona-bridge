@@ -437,13 +437,16 @@ func (c *WebhookConnector) handleSendMessage(ctx context.Context, w http.Respons
 			content.RelatesTo.SetReplyTo(origEventID)
 
 			origEvent, err := ghost.Intent.GetEvent(ctx, roomID, origEventID)
+			origSender := "User"
+			origBody := "Attachment"
+
 			if err == nil && origEvent != nil {
+				origSender = origEvent.Sender.String()
 				if content.Mentions == nil {
 					content.Mentions = &event.Mentions{}
 				}
 				content.Mentions.Add(origEvent.Sender)
 
-				origBody := "Attachment"
 				if origEvent.Content.Parsed != nil {
 					if origContent, ok := origEvent.Content.Parsed.(*event.MessageEventContent); ok {
 						origBody = origContent.Body
@@ -452,13 +455,13 @@ func (c *WebhookConnector) handleSendMessage(ctx context.Context, w http.Respons
 						}
 					}
 				}
-
-				fallbackHTML := fmt.Sprintf(`<mx-reply><blockquote><a href="https://matrix.to/#/%s/%s">In reply to</a> <a href="https://matrix.to/#/%s">%s</a><br>%s</blockquote></mx-reply>`, roomID, origEventID, origEvent.Sender, origEvent.Sender, event.TextToHTML(origBody))
-
-				content.EnsureHasHTML()
-				content.FormattedBody = fallbackHTML + content.FormattedBody
-				content.Body = fmt.Sprintf("> <%s> %s\n\n%s", origEvent.Sender, strings.ReplaceAll(origBody, "\n", "\n> "), content.Body)
 			}
+
+			fallbackHTML := fmt.Sprintf(`<mx-reply><blockquote><a href="https://matrix.to/#/%s/%s">In reply to</a> <a href="https://matrix.to/#/%s">%s</a><br>%s</blockquote></mx-reply>`, roomID, origEventID, origSender, origSender, event.TextToHTML(origBody))
+
+			content.EnsureHasHTML()
+			content.FormattedBody = fallbackHTML + content.FormattedBody
+			content.Body = fmt.Sprintf("> <%s> %s\n\n%s", origSender, strings.ReplaceAll(origBody, "\n", "\n> "), content.Body)
 		}
 
 		if payload.ThreadRoot != "" {
@@ -483,8 +486,8 @@ func (c *WebhookConnector) handleSendFile(ctx context.Context, w http.ResponseWr
 		contentURI = id.ContentURIString(payload.FileURL)
 	} else if payload.FileData != "" {
 		fileData := payload.FileData
-		if strings.Contains(fileData, "base64,") {
-			fileData = strings.SplitN(fileData, "base64,", 2)[1]
+		if idx := strings.Index(fileData, "base64,"); idx != -1 {
+			fileData = fileData[idx+7:]
 		}
 		// Upload base64-encoded file data
 		data, err := base64.StdEncoding.DecodeString(fileData)
@@ -550,13 +553,16 @@ func (c *WebhookConnector) handleSendFile(ctx context.Context, w http.ResponseWr
 			content.RelatesTo.SetReplyTo(origEventID)
 
 			origEvent, err := ghost.Intent.GetEvent(ctx, roomID, origEventID)
+			origSender := "User"
+			origBody := "Attachment"
+
 			if err == nil && origEvent != nil {
+				origSender = origEvent.Sender.String()
 				if content.Mentions == nil {
 					content.Mentions = &event.Mentions{}
 				}
 				content.Mentions.Add(origEvent.Sender)
 
-				origBody := "Attachment"
 				if origEvent.Content.Parsed != nil {
 					if origContent, ok := origEvent.Content.Parsed.(*event.MessageEventContent); ok {
 						origBody = origContent.Body
@@ -565,13 +571,13 @@ func (c *WebhookConnector) handleSendFile(ctx context.Context, w http.ResponseWr
 						}
 					}
 				}
-
-				fallbackHTML := fmt.Sprintf(`<mx-reply><blockquote><a href="https://matrix.to/#/%s/%s">In reply to</a> <a href="https://matrix.to/#/%s">%s</a><br>%s</blockquote></mx-reply>`, roomID, origEventID, origEvent.Sender, origEvent.Sender, event.TextToHTML(origBody))
-
-				content.EnsureHasHTML()
-				content.FormattedBody = fallbackHTML + content.FormattedBody
-				content.Body = fmt.Sprintf("> <%s> %s\n\n%s", origEvent.Sender, strings.ReplaceAll(origBody, "\n", "\n> "), content.Body)
 			}
+
+			fallbackHTML := fmt.Sprintf(`<mx-reply><blockquote><a href="https://matrix.to/#/%s/%s">In reply to</a> <a href="https://matrix.to/#/%s">%s</a><br>%s</blockquote></mx-reply>`, roomID, origEventID, origSender, origSender, event.TextToHTML(origBody))
+
+			content.EnsureHasHTML()
+			content.FormattedBody = fallbackHTML + content.FormattedBody
+			content.Body = fmt.Sprintf("> <%s> %s\n\n%s", origSender, strings.ReplaceAll(origBody, "\n", "\n> "), content.Body)
 		}
 
 		if payload.ThreadRoot != "" {
