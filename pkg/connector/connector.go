@@ -617,13 +617,12 @@ var CmdSetAvatar = &commands.FullHandler{
 			return
 		}
 
-		parsedURL, err := id.ParseContentURI(avatarURL)
-		if err != nil {
-			ce.Reply("Invalid `mxc://` URL: %v", err)
+		if !strings.HasPrefix(avatarURL, "mxc://") {
+			ce.Reply("Invalid URL: must start with `mxc://`")
 			return
 		}
 
-		err = ghost.Intent.SetAvatarURL(ce.Ctx, parsedURL)
+		err = ghost.Intent.SetAvatarURL(ce.Ctx, id.ContentURIString(avatarURL))
 		if err != nil {
 			ce.Reply("Failed to set avatar: %v", err)
 			return
