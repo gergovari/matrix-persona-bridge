@@ -386,10 +386,11 @@ func (c *WebhookConnector) handleInbound(w http.ResponseWriter, r *http.Request)
 		}
 		c.replyJSON(w, http.StatusOK, InboundWebhookResponse{})
 	case "leave_room":
-		ghostMXID := ghost.Intent.GetMXID()
-		_, err = ghost.Intent.SendState(ctx, roomID, event.StateMember, ghostMXID.String(), &event.Content{
-			Parsed: &event.MemberEventContent{Membership: event.MembershipLeave},
-		}, time.Now())
+		if asIntent, ok := ghost.Intent.(*matrix.ASIntent); ok {
+			_, err = asIntent.Matrix.LeaveRoom(ctx, roomID)
+		} else {
+			err = fmt.Errorf("underlying intent does not support leave")
+		}
 		if err != nil {
 			c.replyJSON(w, http.StatusInternalServerError, InboundWebhookResponse{Error: fmt.Sprintf("Failed to leave room: %v", err)})
 			return
@@ -431,12 +432,10 @@ func (c *WebhookConnector) handleSendMessage(ctx context.Context, w http.Respons
 
 	if payload.ReplyTo != "" || payload.ThreadRoot != "" {
 		content.RelatesTo = &event.RelatesTo{}
-		if payload.ReplyTo != "" {
-			content.RelatesTo.InReplyTo = &event.InReplyTo{EventID: id.EventID(payload.ReplyTo)}
-		}
 		if payload.ThreadRoot != "" {
-			content.RelatesTo.Type = event.RelThread
-			content.RelatesTo.EventID = id.EventID(payload.ThreadRoot)
+			content.RelatesTo.SetThread(id.EventID(payload.ThreadRoot), id.EventID(payload.ReplyTo))
+		} else if payload.ReplyTo != "" {
+			content.RelatesTo.SetReplyTo(id.EventID(payload.ReplyTo))
 		}
 	}
 
@@ -455,8 +454,12 @@ func (c *WebhookConnector) handleSendFile(ctx context.Context, w http.ResponseWr
 		// Use pre-uploaded mxc:// URL
 		contentURI = id.ContentURIString(payload.FileURL)
 	} else if payload.FileData != "" {
+		fileData := payload.FileData
+		if strings.Contains(fileData, "base64,") {
+			fileData = strings.SplitN(fileData, "base64,", 2)[1]
+		}
 		// Upload base64-encoded file data
-		data, err := base64.StdEncoding.DecodeString(payload.FileData)
+		data, err := base64.StdEncoding.DecodeString(fileData)
 		if err != nil {
 			c.replyJSON(w, http.StatusBadRequest, InboundWebhookResponse{Error: "Invalid base64 file data"})
 			return
@@ -491,11 +494,16 @@ func (c *WebhookConnector) handleSendFile(ctx context.Context, w http.ResponseWr
 	if fileName == "" {
 		fileName = "file"
 	}
+	body := payload.Text
+	if body == "" {
+		body = fileName
+	}
 
 	content := &event.MessageEventContent{
-		MsgType: msgType,
-		Body:    fileName,
-		URL:     contentURI,
+		MsgType:  msgType,
+		Body:     body,
+		FileName: fileName,
+		URL:      contentURI,
 		Info: &event.FileInfo{
 			MimeType: payload.FileMIME,
 			Size:     payload.FileSize,
@@ -504,12 +512,10 @@ func (c *WebhookConnector) handleSendFile(ctx context.Context, w http.ResponseWr
 
 	if payload.ReplyTo != "" || payload.ThreadRoot != "" {
 		content.RelatesTo = &event.RelatesTo{}
-		if payload.ReplyTo != "" {
-			content.RelatesTo.InReplyTo = &event.InReplyTo{EventID: id.EventID(payload.ReplyTo)}
-		}
 		if payload.ThreadRoot != "" {
-			content.RelatesTo.Type = event.RelThread
-			content.RelatesTo.EventID = id.EventID(payload.ThreadRoot)
+			content.RelatesTo.SetThread(id.EventID(payload.ThreadRoot), id.EventID(payload.ReplyTo))
+		} else if payload.ReplyTo != "" {
+			content.RelatesTo.SetReplyTo(id.EventID(payload.ReplyTo))
 		}
 	}
 
@@ -549,28 +555,15 @@ func (c *WebhookConnector) handleEditMessage(ctx context.Context, w http.Respons
 		return
 	}
 
-	newContent := &event.MessageEventContent{
+	content := &event.MessageEventContent{
 		MsgType: event.MsgText,
 		Body:    payload.Text,
 	}
 	if payload.HTML != "" {
-		newContent.Format = event.FormatHTML
-		newContent.FormattedBody = payload.HTML
-	}
-
-	content := &event.MessageEventContent{
-		MsgType: event.MsgText,
-		Body:    "* " + payload.Text,
-		NewContent: newContent,
-		RelatesTo: &event.RelatesTo{
-			Type:    event.RelReplace,
-			EventID: id.EventID(payload.EventID),
-		},
-	}
-	if payload.HTML != "" {
 		content.Format = event.FormatHTML
-		content.FormattedBody = "* " + payload.HTML
+		content.FormattedBody = payload.HTML
 	}
+	content.SetEdit(id.EventID(payload.EventID))
 
 	resp, err := ghost.Intent.SendMessage(ctx, roomID, event.EventMessage, &event.Content{Parsed: content}, nil)
 	if err != nil {
