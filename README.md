@@ -174,18 +174,151 @@ X-Webhook-Token: dJ8ks9...  <-- The secret Header Token
 Content-Type: application/json
 ```
 
-**Body:**
+**Response format:** All responses are JSON:
+```json
+{"event_id": "$abc123"}
+{"error": "description"}
+```
+
+#### Supported Actions
+
+| Action | Description | Required Fields |
+|--------|-------------|-----------------|
+| `send_message` | Send text/notice/emote with optional reply/thread | `text` |
+| `send_file` | Send image/video/audio/file attachment | `file_url` or `file_data` |
+| `send_reaction` | React to an event with emoji | `event_id`, `reaction` |
+| `edit_message` | Edit a previously sent message | `event_id`, `text` |
+| `redact` | Delete/redact an event | `event_id` |
+| `typing` | Show/hide typing indicator | `typing` |
+| `read_receipt` | Mark an event as read | `event_id` |
+| `join_room` | Join a room | — |
+| `leave_room` | Leave a room | — |
+| `set_topic` | Set the room topic | `topic` |
+| `set_room_name` | Set the room name | `room_name` |
+
+#### `send_message`
 ```json
 {
   "action": "send_message",
   "room_id": "!xyzabc:yourdomain.com",
-  "text": "Hello from your webhook!"
+  "text": "Hello from webhook!",
+  "html": "<b>Hello</b> from webhook!",
+  "msg_type": "m.text",
+  "reply_to": "$event_id_to_reply_to",
+  "thread_root": "$thread_root_event_id"
+}
+```
+- `msg_type`: `"m.text"` (default), `"m.notice"`, or `"m.emote"`
+- `html`: Optional HTML-formatted body
+- `reply_to`: Optional event ID to reply to
+- `thread_root`: Optional event ID to create/continue a thread
+
+#### `send_file`
+```json
+{
+  "action": "send_file",
+  "room_id": "!xyzabc:yourdomain.com",
+  "file_url": "mxc://yourdomain.com/AbCdEfGh",
+  "file_name": "photo.png",
+  "file_mime": "image/png",
+  "file_size": 12345,
+  "reply_to": "$optional_reply_event"
+}
+```
+Or upload with base64 data:
+```json
+{
+  "action": "send_file",
+  "room_id": "!xyzabc:yourdomain.com",
+  "file_data": "iVBORw0KGgo...",
+  "file_name": "photo.png",
+  "file_mime": "image/png"
 }
 ```
 
-*Supported Actions:*
-- `send_message`: Sends text to the specified `room_id`.
-- `join_room`: Forces the Persona to join the specified `room_id`.
+**n8n / Multipart upload:** You can also upload files via `multipart/form-data` (compatible with n8n's HTTP Request node):
+```
+POST /webhook/<token>
+Content-Type: multipart/form-data
+
+action=send_file
+room_id=!xyzabc:yourdomain.com
+file_name=photo.png
+file_mime=image/png
+file=@/path/to/photo.png
+```
+If no `action` field is provided in a multipart request, it defaults to `send_file`.
+
+File type is auto-detected from `file_mime`: `image/*` → image, `video/*` → video, `audio/*` → audio, everything else → file.
+
+#### `send_reaction`
+```json
+{
+  "action": "send_reaction",
+  "room_id": "!xyzabc:yourdomain.com",
+  "event_id": "$target_event_id",
+  "reaction": "👍"
+}
+```
+
+#### `edit_message`
+```json
+{
+  "action": "edit_message",
+  "room_id": "!xyzabc:yourdomain.com",
+  "event_id": "$original_event_id",
+  "text": "Updated message text",
+  "html": "<i>Updated</i> message text"
+}
+```
+
+#### `redact`
+```json
+{
+  "action": "redact",
+  "room_id": "!xyzabc:yourdomain.com",
+  "event_id": "$event_to_delete",
+  "reason": "Optional reason"
+}
+```
+
+#### `typing`
+```json
+{
+  "action": "typing",
+  "room_id": "!xyzabc:yourdomain.com",
+  "typing": true,
+  "timeout": 5000
+}
+```
+- `typing`: `true` to start, `false` to stop
+- `timeout`: Duration in milliseconds (default: 30000)
+
+#### `read_receipt`
+```json
+{
+  "action": "read_receipt",
+  "room_id": "!xyzabc:yourdomain.com",
+  "event_id": "$last_read_event_id"
+}
+```
+
+#### `join_room` / `leave_room`
+```json
+{
+  "action": "join_room",
+  "room_id": "!xyzabc:yourdomain.com"
+}
+```
+
+#### `set_topic` / `set_room_name`
+```json
+{
+  "action": "set_topic",
+  "room_id": "!xyzabc:yourdomain.com",
+  "topic": "New room topic"
+}
+```
 
 ### 2. Outbound Webhook (Matrix -> Backend)
 

@@ -3,11 +3,14 @@ package connector
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"go.mau.fi/util/configupgrade"
 	"go.mau.fi/util/random"
@@ -233,15 +236,48 @@ func (c *WebhookConnector) startWebhookListener() {
 }
 
 type InboundWebhookPayload struct {
-	Action string `json:"action"` // "send_message", "join_room"
+	Action string `json:"action"`
 	RoomID string `json:"room_id"`
-	Text   string `json:"text"`
+
+	// send_message fields
+	Text       string `json:"text,omitempty"`
+	HTML       string `json:"html,omitempty"`
+	MsgType    string `json:"msg_type,omitempty"` // "m.text" (default), "m.notice", "m.emote"
+	ReplyTo    string `json:"reply_to,omitempty"`
+	ThreadRoot string `json:"thread_root,omitempty"`
+
+	// send_file fields
+	FileURL    string `json:"file_url,omitempty"`    // mxc:// URL
+	FileData   string `json:"file_data,omitempty"`   // base64-encoded file data (alternative to file_url)
+	FileName   string `json:"file_name,omitempty"`
+	FileMIME   string `json:"file_mime,omitempty"`
+	FileSize   int    `json:"file_size,omitempty"`
+
+	// send_reaction / redact / edit / read_receipt
+	EventID  string `json:"event_id,omitempty"`
+	Reaction string `json:"reaction,omitempty"`
+	Reason   string `json:"reason,omitempty"`
+
+	// edit_message fields (uses EventID + Text/HTML)
+
+	// typing
+	Typing  bool `json:"typing,omitempty"`
+	Timeout int  `json:"timeout,omitempty"` // ms, default 30000
+
+	// set_topic / set_room_name
+	Topic    string `json:"topic,omitempty"`
+	RoomName string `json:"room_name,omitempty"`
+}
+
+type InboundWebhookResponse struct {
+	EventID string `json:"event_id,omitempty"`
+	Error   string `json:"error,omitempty"`
 }
 
 func (c *WebhookConnector) handleInbound(w http.ResponseWriter, r *http.Request) {
 	inboundToken := r.PathValue("inboundToken")
 	if inboundToken == "" {
-		http.Error(w, "Missing inbound token", http.StatusBadRequest)
+		c.replyJSON(w, http.StatusBadRequest, InboundWebhookResponse{Error: "Missing inbound token"})
 		return
 	}
 
@@ -258,51 +294,374 @@ func (c *WebhookConnector) handleInbound(w http.ResponseWriter, r *http.Request)
 	c.PersonasLock.RUnlock()
 
 	if login == nil {
-		http.Error(w, "Invalid token or persona not found", http.StatusUnauthorized)
+		c.replyJSON(w, http.StatusUnauthorized, InboundWebhookResponse{Error: "Invalid token or persona not found"})
 		return
 	}
 
 	if loginMeta.HeaderName != "" {
 		if r.Header.Get(loginMeta.HeaderName) != loginMeta.HeaderValue {
-			http.Error(w, "Invalid security header", http.StatusUnauthorized)
+			c.replyJSON(w, http.StatusUnauthorized, InboundWebhookResponse{Error: "Invalid security header"})
 			return
 		}
 	}
 
 	ghost, err := c.Bridge.GetGhostByID(r.Context(), networkid.UserID(login.ID))
 	if err != nil || ghost == nil {
-		http.Error(w, "Ghost not found", http.StatusInternalServerError)
+		c.replyJSON(w, http.StatusInternalServerError, InboundWebhookResponse{Error: "Ghost not found"})
 		return
 	}
 
 	var payload InboundWebhookPayload
-	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		http.Error(w, "Bad request", http.StatusBadRequest)
-		return
+	contentType := r.Header.Get("Content-Type")
+
+	if strings.HasPrefix(contentType, "multipart/form-data") {
+		// n8n-style file upload via multipart/form-data
+		if err := r.ParseMultipartForm(32 << 20); err != nil { // 32 MB max
+			c.replyJSON(w, http.StatusBadRequest, InboundWebhookResponse{Error: "Failed to parse multipart form"})
+			return
+		}
+		payload.Action = r.FormValue("action")
+		if payload.Action == "" {
+			payload.Action = "send_file" // default for multipart
+		}
+		payload.RoomID = r.FormValue("room_id")
+		payload.Text = r.FormValue("text")
+		payload.HTML = r.FormValue("html")
+		payload.MsgType = r.FormValue("msg_type")
+		payload.ReplyTo = r.FormValue("reply_to")
+		payload.ThreadRoot = r.FormValue("thread_root")
+		payload.FileName = r.FormValue("file_name")
+		payload.FileMIME = r.FormValue("file_mime")
+		payload.EventID = r.FormValue("event_id")
+
+		// Read the uploaded file if present
+		file, header, fileErr := r.FormFile("file")
+		if fileErr == nil {
+			defer file.Close()
+			fileData, readErr := io.ReadAll(file)
+			if readErr != nil {
+				c.replyJSON(w, http.StatusBadRequest, InboundWebhookResponse{Error: "Failed to read uploaded file"})
+				return
+			}
+			payload.FileData = base64.StdEncoding.EncodeToString(fileData)
+			if payload.FileName == "" {
+				payload.FileName = header.Filename
+			}
+			if payload.FileMIME == "" {
+				payload.FileMIME = header.Header.Get("Content-Type")
+			}
+			payload.FileSize = len(fileData)
+		}
+	} else {
+		// Standard JSON body
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			c.replyJSON(w, http.StatusBadRequest, InboundWebhookResponse{Error: "Invalid JSON body"})
+			return
+		}
 	}
 
+	ctx := r.Context()
 	roomID := id.RoomID(payload.RoomID)
 
-	if payload.Action == "send_message" {
-		content := &event.MessageEventContent{
-			MsgType: event.MsgText,
-			Body:    payload.Text,
+	switch payload.Action {
+	case "send_message":
+		c.handleSendMessage(ctx, w, ghost, roomID, &payload)
+	case "send_file":
+		c.handleSendFile(ctx, w, ghost, roomID, &payload)
+	case "send_reaction":
+		c.handleSendReaction(ctx, w, ghost, roomID, &payload)
+	case "edit_message":
+		c.handleEditMessage(ctx, w, ghost, roomID, &payload)
+	case "redact":
+		c.handleRedact(ctx, w, ghost, roomID, &payload)
+	case "typing":
+		c.handleTyping(ctx, w, ghost, roomID, &payload)
+	case "read_receipt":
+		c.handleReadReceipt(ctx, w, ghost, roomID, &payload)
+	case "join_room":
+		err = ghost.Intent.EnsureJoined(ctx, roomID)
+		if err != nil {
+			c.replyJSON(w, http.StatusInternalServerError, InboundWebhookResponse{Error: fmt.Sprintf("Failed to join room: %v", err)})
+			return
 		}
-		_, err = ghost.Intent.SendMessage(r.Context(), roomID, event.EventMessage, &event.Content{Parsed: content}, nil)
-	} else if payload.Action == "join_room" {
-		err = ghost.Intent.EnsureJoined(r.Context(), roomID)
-	} else {
-		http.Error(w, "Unknown action", http.StatusBadRequest)
-		return
+		c.replyJSON(w, http.StatusOK, InboundWebhookResponse{})
+	case "leave_room":
+		ghostMXID := ghost.Intent.GetMXID()
+		_, err = ghost.Intent.SendState(ctx, roomID, event.StateMember, ghostMXID.String(), &event.Content{
+			Parsed: &event.MemberEventContent{Membership: event.MembershipLeave},
+		}, time.Now())
+		if err != nil {
+			c.replyJSON(w, http.StatusInternalServerError, InboundWebhookResponse{Error: fmt.Sprintf("Failed to leave room: %v", err)})
+			return
+		}
+		c.replyJSON(w, http.StatusOK, InboundWebhookResponse{})
+	case "set_topic":
+		c.handleSetTopic(ctx, w, ghost, roomID, &payload)
+	case "set_room_name":
+		c.handleSetRoomName(ctx, w, ghost, roomID, &payload)
+	default:
+		c.replyJSON(w, http.StatusBadRequest, InboundWebhookResponse{Error: fmt.Sprintf("Unknown action: %s", payload.Action)})
+	}
+}
+
+func (c *WebhookConnector) replyJSON(w http.ResponseWriter, status int, resp InboundWebhookResponse) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(resp)
+}
+
+func (c *WebhookConnector) handleSendMessage(ctx context.Context, w http.ResponseWriter, ghost *bridgev2.Ghost, roomID id.RoomID, payload *InboundWebhookPayload) {
+	msgType := event.MsgText
+	switch payload.MsgType {
+	case "m.notice":
+		msgType = event.MsgNotice
+	case "m.emote":
+		msgType = event.MsgEmote
 	}
 
+	content := &event.MessageEventContent{
+		MsgType: msgType,
+		Body:    payload.Text,
+	}
+
+	if payload.HTML != "" {
+		content.Format = event.FormatHTML
+		content.FormattedBody = payload.HTML
+	}
+
+	if payload.ReplyTo != "" || payload.ThreadRoot != "" {
+		content.RelatesTo = &event.RelatesTo{}
+		if payload.ReplyTo != "" {
+			content.RelatesTo.InReplyTo = &event.InReplyTo{EventID: id.EventID(payload.ReplyTo)}
+		}
+		if payload.ThreadRoot != "" {
+			content.RelatesTo.Type = event.RelThread
+			content.RelatesTo.EventID = id.EventID(payload.ThreadRoot)
+		}
+	}
+
+	resp, err := ghost.Intent.SendMessage(ctx, roomID, event.EventMessage, &event.Content{Parsed: content}, nil)
 	if err != nil {
-		c.Bridge.Log.Err(err).Msg("Failed to execute inbound action")
-		http.Error(w, "Matrix error", http.StatusInternalServerError)
+		c.replyJSON(w, http.StatusInternalServerError, InboundWebhookResponse{Error: fmt.Sprintf("Failed to send message: %v", err)})
+		return
+	}
+	c.replyJSON(w, http.StatusOK, InboundWebhookResponse{EventID: resp.EventID.String()})
+}
+
+func (c *WebhookConnector) handleSendFile(ctx context.Context, w http.ResponseWriter, ghost *bridgev2.Ghost, roomID id.RoomID, payload *InboundWebhookPayload) {
+	var contentURI id.ContentURIString
+
+	if payload.FileURL != "" {
+		// Use pre-uploaded mxc:// URL
+		contentURI = id.ContentURIString(payload.FileURL)
+	} else if payload.FileData != "" {
+		// Upload base64-encoded file data
+		data, err := base64.StdEncoding.DecodeString(payload.FileData)
+		if err != nil {
+			c.replyJSON(w, http.StatusBadRequest, InboundWebhookResponse{Error: "Invalid base64 file data"})
+			return
+		}
+		mime := payload.FileMIME
+		if mime == "" {
+			mime = "application/octet-stream"
+		}
+		uploadedURL, _, uploadErr := ghost.Intent.UploadMedia(ctx, roomID, data, payload.FileName, mime)
+		if uploadErr != nil {
+			c.replyJSON(w, http.StatusInternalServerError, InboundWebhookResponse{Error: fmt.Sprintf("Failed to upload file: %v", uploadErr)})
+			return
+		}
+		contentURI = uploadedURL
+	} else {
+		c.replyJSON(w, http.StatusBadRequest, InboundWebhookResponse{Error: "Either file_url or file_data is required"})
 		return
 	}
 
-	w.WriteHeader(http.StatusOK)
+	// Determine message type from MIME
+	msgType := event.MsgFile
+	mime := strings.ToLower(payload.FileMIME)
+	if strings.HasPrefix(mime, "image/") {
+		msgType = event.MsgImage
+	} else if strings.HasPrefix(mime, "video/") {
+		msgType = event.MsgVideo
+	} else if strings.HasPrefix(mime, "audio/") {
+		msgType = event.MsgAudio
+	}
+
+	fileName := payload.FileName
+	if fileName == "" {
+		fileName = "file"
+	}
+
+	content := &event.MessageEventContent{
+		MsgType: msgType,
+		Body:    fileName,
+		URL:     contentURI,
+		Info: &event.FileInfo{
+			MimeType: payload.FileMIME,
+			Size:     payload.FileSize,
+		},
+	}
+
+	if payload.ReplyTo != "" || payload.ThreadRoot != "" {
+		content.RelatesTo = &event.RelatesTo{}
+		if payload.ReplyTo != "" {
+			content.RelatesTo.InReplyTo = &event.InReplyTo{EventID: id.EventID(payload.ReplyTo)}
+		}
+		if payload.ThreadRoot != "" {
+			content.RelatesTo.Type = event.RelThread
+			content.RelatesTo.EventID = id.EventID(payload.ThreadRoot)
+		}
+	}
+
+	resp, err := ghost.Intent.SendMessage(ctx, roomID, event.EventMessage, &event.Content{Parsed: content}, nil)
+	if err != nil {
+		c.replyJSON(w, http.StatusInternalServerError, InboundWebhookResponse{Error: fmt.Sprintf("Failed to send file: %v", err)})
+		return
+	}
+	c.replyJSON(w, http.StatusOK, InboundWebhookResponse{EventID: resp.EventID.String()})
+}
+
+func (c *WebhookConnector) handleSendReaction(ctx context.Context, w http.ResponseWriter, ghost *bridgev2.Ghost, roomID id.RoomID, payload *InboundWebhookPayload) {
+	if payload.EventID == "" || payload.Reaction == "" {
+		c.replyJSON(w, http.StatusBadRequest, InboundWebhookResponse{Error: "event_id and reaction are required"})
+		return
+	}
+
+	content := &event.ReactionEventContent{
+		RelatesTo: event.RelatesTo{
+			Type:    event.RelAnnotation,
+			EventID: id.EventID(payload.EventID),
+			Key:     payload.Reaction,
+		},
+	}
+
+	resp, err := ghost.Intent.SendMessage(ctx, roomID, event.EventReaction, &event.Content{Parsed: content}, nil)
+	if err != nil {
+		c.replyJSON(w, http.StatusInternalServerError, InboundWebhookResponse{Error: fmt.Sprintf("Failed to send reaction: %v", err)})
+		return
+	}
+	c.replyJSON(w, http.StatusOK, InboundWebhookResponse{EventID: resp.EventID.String()})
+}
+
+func (c *WebhookConnector) handleEditMessage(ctx context.Context, w http.ResponseWriter, ghost *bridgev2.Ghost, roomID id.RoomID, payload *InboundWebhookPayload) {
+	if payload.EventID == "" || payload.Text == "" {
+		c.replyJSON(w, http.StatusBadRequest, InboundWebhookResponse{Error: "event_id and text are required"})
+		return
+	}
+
+	newContent := &event.MessageEventContent{
+		MsgType: event.MsgText,
+		Body:    payload.Text,
+	}
+	if payload.HTML != "" {
+		newContent.Format = event.FormatHTML
+		newContent.FormattedBody = payload.HTML
+	}
+
+	content := &event.MessageEventContent{
+		MsgType: event.MsgText,
+		Body:    "* " + payload.Text,
+		NewContent: newContent,
+		RelatesTo: &event.RelatesTo{
+			Type:    event.RelReplace,
+			EventID: id.EventID(payload.EventID),
+		},
+	}
+	if payload.HTML != "" {
+		content.Format = event.FormatHTML
+		content.FormattedBody = "* " + payload.HTML
+	}
+
+	resp, err := ghost.Intent.SendMessage(ctx, roomID, event.EventMessage, &event.Content{Parsed: content}, nil)
+	if err != nil {
+		c.replyJSON(w, http.StatusInternalServerError, InboundWebhookResponse{Error: fmt.Sprintf("Failed to edit message: %v", err)})
+		return
+	}
+	c.replyJSON(w, http.StatusOK, InboundWebhookResponse{EventID: resp.EventID.String()})
+}
+
+func (c *WebhookConnector) handleRedact(ctx context.Context, w http.ResponseWriter, ghost *bridgev2.Ghost, roomID id.RoomID, payload *InboundWebhookPayload) {
+	if payload.EventID == "" {
+		c.replyJSON(w, http.StatusBadRequest, InboundWebhookResponse{Error: "event_id is required"})
+		return
+	}
+
+	content := &event.Content{
+		Parsed: &event.RedactionEventContent{
+			Redacts: id.EventID(payload.EventID),
+			Reason:  payload.Reason,
+		},
+	}
+
+	resp, err := ghost.Intent.SendMessage(ctx, roomID, event.EventRedaction, content, nil)
+	if err != nil {
+		c.replyJSON(w, http.StatusInternalServerError, InboundWebhookResponse{Error: fmt.Sprintf("Failed to redact: %v", err)})
+		return
+	}
+	c.replyJSON(w, http.StatusOK, InboundWebhookResponse{EventID: resp.EventID.String()})
+}
+
+func (c *WebhookConnector) handleTyping(ctx context.Context, w http.ResponseWriter, ghost *bridgev2.Ghost, roomID id.RoomID, payload *InboundWebhookPayload) {
+	timeout := time.Duration(payload.Timeout) * time.Millisecond
+	if timeout == 0 {
+		timeout = 30 * time.Second
+	}
+	if !payload.Typing {
+		timeout = 0
+	}
+
+	err := ghost.Intent.MarkTyping(ctx, roomID, bridgev2.TypingTypeText, timeout)
+	if err != nil {
+		c.replyJSON(w, http.StatusInternalServerError, InboundWebhookResponse{Error: fmt.Sprintf("Failed to set typing: %v", err)})
+		return
+	}
+	c.replyJSON(w, http.StatusOK, InboundWebhookResponse{})
+}
+
+func (c *WebhookConnector) handleReadReceipt(ctx context.Context, w http.ResponseWriter, ghost *bridgev2.Ghost, roomID id.RoomID, payload *InboundWebhookPayload) {
+	if payload.EventID == "" {
+		c.replyJSON(w, http.StatusBadRequest, InboundWebhookResponse{Error: "event_id is required"})
+		return
+	}
+
+	err := ghost.Intent.MarkRead(ctx, roomID, id.EventID(payload.EventID), time.Now())
+	if err != nil {
+		c.replyJSON(w, http.StatusInternalServerError, InboundWebhookResponse{Error: fmt.Sprintf("Failed to send read receipt: %v", err)})
+		return
+	}
+	c.replyJSON(w, http.StatusOK, InboundWebhookResponse{})
+}
+
+func (c *WebhookConnector) handleSetTopic(ctx context.Context, w http.ResponseWriter, ghost *bridgev2.Ghost, roomID id.RoomID, payload *InboundWebhookPayload) {
+	if payload.Topic == "" {
+		c.replyJSON(w, http.StatusBadRequest, InboundWebhookResponse{Error: "topic is required"})
+		return
+	}
+
+	resp, err := ghost.Intent.SendState(ctx, roomID, event.StateTopic, "", &event.Content{
+		Parsed: &event.TopicEventContent{Topic: payload.Topic},
+	}, time.Now())
+	if err != nil {
+		c.replyJSON(w, http.StatusInternalServerError, InboundWebhookResponse{Error: fmt.Sprintf("Failed to set topic: %v", err)})
+		return
+	}
+	c.replyJSON(w, http.StatusOK, InboundWebhookResponse{EventID: resp.EventID.String()})
+}
+
+func (c *WebhookConnector) handleSetRoomName(ctx context.Context, w http.ResponseWriter, ghost *bridgev2.Ghost, roomID id.RoomID, payload *InboundWebhookPayload) {
+	if payload.RoomName == "" {
+		c.replyJSON(w, http.StatusBadRequest, InboundWebhookResponse{Error: "room_name is required"})
+		return
+	}
+
+	resp, err := ghost.Intent.SendState(ctx, roomID, event.StateRoomName, "", &event.Content{
+		Parsed: &event.RoomNameEventContent{Name: payload.RoomName},
+	}, time.Now())
+	if err != nil {
+		c.replyJSON(w, http.StatusInternalServerError, InboundWebhookResponse{Error: fmt.Sprintf("Failed to set room name: %v", err)})
+		return
+	}
+	c.replyJSON(w, http.StatusOK, InboundWebhookResponse{EventID: resp.EventID.String()})
 }
 
 func (c *WebhookConnector) handleOutboundMatrixEvent(evt *event.Event) {
