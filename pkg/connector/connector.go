@@ -125,7 +125,7 @@ func (c *WebhookConnector) GetDBMetaTypes() database.MetaTypes {
 }
 
 func (c *WebhookConnector) LoadUserLogin(ctx context.Context, login *bridgev2.UserLogin) error {
-	login.Client = &WebhookAPI{}
+	login.Client = &WebhookAPI{Login: login}
 	
 	c.PersonasLock.Lock()
 	c.Personas[login.ID] = login
@@ -195,10 +195,16 @@ func (pl *PersonaLogin) SubmitUserInput(ctx context.Context, input map[string]st
 		return nil, err
 	}
 
+	networkURL := pl.Connector.Config.NetworkURL
+	if networkURL == "" {
+		networkURL = fmt.Sprintf("http://<host>:%d", pl.Connector.Config.Inbound.Port)
+	}
+	networkURL = strings.TrimRight(networkURL, "/")
+
 	return &bridgev2.LoginStep{
 		Type:         bridgev2.LoginStepTypeComplete,
 		StepID:       "complete",
-		Instructions: fmt.Sprintf("Persona created successfully!\n\n**Keep these details secret:**\n- **Inbound URL:** `http://<host>:%d%s/%s`\n- **Required Header Name:** `%s`\n- **Required Header Token:** `%s`\n\nUse `add-outbound %s <url>` to add outbound webhook URLs.", pl.Connector.Config.Inbound.Port, pl.Connector.Config.Inbound.Path, inboundToken, headerName, headerValue, pl.PersonaID),
+		Instructions: fmt.Sprintf("Persona created successfully!\n\n**Keep these details secret:**\n- **Inbound URL:** `%s%s/%s`\n- **Required Header Name:** `%s`\n- **Required Header Token:** `%s`\n\nUse `add-outbound %s <url>` to add outbound webhook URLs.", networkURL, pl.Connector.Config.Inbound.Path, inboundToken, headerName, headerValue, pl.PersonaID),
 		CompleteParams: &bridgev2.LoginCompleteParams{
 			UserLoginID: ul.ID,
 			UserLogin:   ul,
@@ -359,10 +365,13 @@ func (c *WebhookConnector) sendOutbound(login *bridgev2.UserLogin, evt *event.Ev
 	}
 }
 
-// Dummy WebhookAPI implementation to satisfy bridgev2
-type WebhookAPI struct{}
+// WebhookAPI implementation to satisfy bridgev2
+type WebhookAPI struct {
+	Login *bridgev2.UserLogin
+}
 
 var _ bridgev2.NetworkAPI = (*WebhookAPI)(nil)
+var _ bridgev2.IdentifierResolvingNetworkAPI = (*WebhookAPI)(nil)
 
 func (a *WebhookAPI) Connect(ctx context.Context) {}
 func (a *WebhookAPI) Disconnect()                 {}
@@ -373,6 +382,27 @@ func (a *WebhookAPI) GetCapabilities(ctx context.Context, portal *bridgev2.Porta
 func (a *WebhookAPI) HandleMatrixMessage(ctx context.Context, msg *bridgev2.MatrixMessage) (*bridgev2.MatrixMessageResponse, error) { return nil, nil }
 func (a *WebhookAPI) GetChatInfo(ctx context.Context, portal *bridgev2.Portal) (*bridgev2.ChatInfo, error) { return &bridgev2.ChatInfo{}, nil }
 func (a *WebhookAPI) GetUserInfo(ctx context.Context, ghost *bridgev2.Ghost) (*bridgev2.UserInfo, error) { return &bridgev2.UserInfo{}, nil }
+
+// ResolveIdentifier allows ghosts to accept room invites.
+// When a Matrix user invites a persona ghost, the bridgev2 framework checks
+// if the NetworkAPI implements IdentifierResolvingNetworkAPI. Without this,
+// invites are rejected with "This bridge does not support starting chats".
+func (a *WebhookAPI) ResolveIdentifier(ctx context.Context, identifier string, createChat bool) (*bridgev2.ResolveIdentifierResponse, error) {
+	if !createChat {
+		return &bridgev2.ResolveIdentifierResponse{
+			UserID: networkid.UserID(identifier),
+		}, nil
+	}
+	return &bridgev2.ResolveIdentifierResponse{
+		UserID: networkid.UserID(identifier),
+		Chat: &bridgev2.CreateChatResponse{
+			PortalKey: networkid.PortalKey{
+				ID:       networkid.PortalID(identifier),
+				Receiver: a.Login.ID,
+			},
+		},
+	}, nil
+}
 
 // Bot commands for managing personas
 

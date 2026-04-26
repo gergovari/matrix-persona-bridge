@@ -91,8 +91,8 @@ Open a direct chat with the bridge bot and type:
 ```text
 login
 ```
-The bot will guide you through the `Create Persona` flow:
-1. **Persona ID**: Give it an identifier (e.g., `bot-1`). This will make the ghost's MXID `@webhook_bot-1:yourdomain.com`.
+
+> **Note:** Just type `login` with no arguments. The bot will automatically start the persona creation flow and ask for a **Persona ID** (e.g., `bot-1`). This will make the ghost's MXID `@webhook_bot-1:yourdomain.com`.
 
 ### Secure Credentials Provided
 
@@ -102,12 +102,18 @@ Once completed, the bot will reply with your generated credentials. Keep these s
 Persona created successfully!
 
 **Keep these details secret:**
-- **Inbound URL:** http://<bridge-host>:8080/webhook/8fX2aB...
+- **Inbound URL:** https://your-public-webhook-domain.com/webhook/8fX2aB...
 - **Required Header Name:** X-Webhook-Token
 - **Required Header Token:** dJ8ks9...
 
 Use `add-outbound bot-1 <url>` to add outbound webhook URLs.
 ```
+
+> The Inbound URL uses the `network_url` from your bridge configuration. Make sure it points to your publicly reachable bridge endpoint.
+
+### Inviting a Persona to Rooms
+
+After creation, simply **invite the persona's ghost** (e.g., `@webhook_bot-1:yourdomain.com`) to any room. The ghost will automatically accept the invite and start forwarding events.
 
 ### Managing Outbound URLs
 
