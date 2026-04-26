@@ -436,13 +436,7 @@ func (c *WebhookConnector) handleSendMessage(ctx context.Context, w http.Respons
 			origEventID := id.EventID(payload.ReplyTo)
 			content.RelatesTo.SetReplyTo(origEventID)
 
-			var origEvent *event.Event
-			var err error
-			if asIntent, ok := ghost.Intent.(*matrix.ASIntent); ok {
-				origEvent, err = asIntent.Matrix.Client.GetEvent(ctx, roomID, origEventID)
-			} else {
-				origEvent, err = ghost.Intent.GetEvent(ctx, roomID, origEventID)
-			}
+			origEvent, err := ghost.Intent.GetEvent(ctx, roomID, origEventID)
 			origSender := "User"
 			origBody := "Attachment"
 
@@ -558,13 +552,7 @@ func (c *WebhookConnector) handleSendFile(ctx context.Context, w http.ResponseWr
 			origEventID := id.EventID(payload.ReplyTo)
 			content.RelatesTo.SetReplyTo(origEventID)
 
-			var origEvent *event.Event
-			var err error
-			if asIntent, ok := ghost.Intent.(*matrix.ASIntent); ok {
-				origEvent, err = asIntent.Matrix.Client.GetEvent(ctx, roomID, origEventID)
-			} else {
-				origEvent, err = ghost.Intent.GetEvent(ctx, roomID, origEventID)
-			}
+			origEvent, err := ghost.Intent.GetEvent(ctx, roomID, origEventID)
 			origSender := "User"
 			origBody := "Attachment"
 
