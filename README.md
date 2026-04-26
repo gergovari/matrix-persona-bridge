@@ -322,35 +322,236 @@ File type is auto-detected from `file_mime`: `image/*` → image, `video/*` → 
 
 ### 2. Outbound Webhook (Matrix -> Backend)
 
-Whenever a Matrix event occurs in a room where your Persona is present (or if the Persona is invited to a room), the bridge intercepts it and sends a `POST` request to **all** configured Outbound Webhook URLs.
+Whenever a Matrix event occurs in a room where your Persona is present (or if the Persona is invited), the bridge forwards it as a `POST` to **all** configured Outbound Webhook URLs.
 
 **Headers:**
 ```http
-X-Webhook-Token: dJ8ks9...  <-- The same secret Header Token used for inbound
+X-Webhook-Token: dJ8ks9...  <-- The persona's secret Header Token
 Content-Type: application/json
 ```
 
-**Body:**
+**Body structure:** Every outbound payload wraps the raw Matrix event:
+```json
+{
+  "persona_id": "bot-1",
+  "event": { ... }
+}
+```
+
+The `event` object is the **raw, unmodified JSON** from the Matrix homeserver. The `type` field tells you what kind of event it is.
+
+#### Forwarded Event Types
+
+| Event Type | Description |
+|------------|-------------|
+| `m.room.message` | Text messages, images, files, audio, video, notices, emotes |
+| `m.room.member` | Join, leave, invite, kick, ban membership changes |
+| `m.room.name` | Room name changes |
+| `m.room.topic` | Room topic changes |
+| `m.room.power_levels` | Permission/power level changes |
+| `m.room.redaction` | Message deletions |
+| `m.reaction` | Emoji reactions |
+
+#### `m.room.message` — Text
 ```json
 {
   "persona_id": "bot-1",
   "event": {
     "type": "m.room.message",
-    "sender": "@someuser:yourdomain.com",
-    "room_id": "!xyzabc:yourdomain.com",
+    "sender": "@user:yourdomain.com",
+    "room_id": "!abc:yourdomain.com",
+    "event_id": "$msg123",
+    "origin_server_ts": 1690000000000,
     "content": {
       "msgtype": "m.text",
-      "body": "Hi there!"
-    },
-    "origin_server_ts": 1690000000000,
-    "event_id": "$abc123def"
+      "body": "Hello!",
+      "format": "org.matrix.custom.html",
+      "formatted_body": "<b>Hello!</b>"
+    }
+  }
+}
+```
+**`content.msgtype` values:** `m.text`, `m.notice`, `m.emote`, `m.image`, `m.video`, `m.audio`, `m.file`, `m.location`
+
+#### `m.room.message` — Reply
+When a message is a reply, `content` includes `m.relates_to`:
+```json
+{
+  "content": {
+    "msgtype": "m.text",
+    "body": "> original message\n\nReply text",
+    "m.relates_to": {
+      "m.in_reply_to": {
+        "event_id": "$original_event_id"
+      }
+    }
   }
 }
 ```
 
-*Note: The `event` payload is the raw, 100% native JSON directly from the Matrix Homeserver.*
+#### `m.room.message` — File/Image/Video/Audio
+```json
+{
+  "content": {
+    "msgtype": "m.image",
+    "body": "photo.png",
+    "url": "mxc://yourdomain.com/AbCdEfGh",
+    "info": {
+      "mimetype": "image/png",
+      "size": 12345,
+      "w": 800,
+      "h": 600
+    }
+  }
+}
+```
+Download media via: `https://yourdomain.com/_matrix/media/v3/download/<server>/<media_id>`
 
-*Note: The outbound request includes the `X-Webhook-Token` header with the persona's security token, allowing your backend to authenticate the request.*
+#### `m.room.message` — Edit
+```json
+{
+  "content": {
+    "msgtype": "m.text",
+    "body": "* Corrected text",
+    "m.new_content": {
+      "msgtype": "m.text",
+      "body": "Corrected text"
+    },
+    "m.relates_to": {
+      "rel_type": "m.replace",
+      "event_id": "$original_event_id"
+    }
+  }
+}
+```
+Check for `m.relates_to.rel_type == "m.replace"` to detect edits. The actual new content is in `m.new_content`.
+
+#### `m.room.member`
+```json
+{
+  "persona_id": "bot-1",
+  "event": {
+    "type": "m.room.member",
+    "sender": "@admin:yourdomain.com",
+    "state_key": "@user:yourdomain.com",
+    "room_id": "!abc:yourdomain.com",
+    "event_id": "$mem456",
+    "origin_server_ts": 1690000000000,
+    "content": {
+      "membership": "join",
+      "displayname": "User",
+      "avatar_url": "mxc://yourdomain.com/avatar123"
+    }
+  }
+}
+```
+**`content.membership` values:**
+- `invite` — User was invited
+- `join` — User joined (or accepted invite)
+- `leave` — User left or was kicked
+- `ban` — User was banned
+
+**Tip:** When `state_key` matches the persona's ghost MXID and `membership` is `invite`, your backend is being invited to a room. Respond with the `join_room` inbound action to accept.
+
+#### `m.reaction`
+```json
+{
+  "persona_id": "bot-1",
+  "event": {
+    "type": "m.reaction",
+    "sender": "@user:yourdomain.com",
+    "room_id": "!abc:yourdomain.com",
+    "event_id": "$react789",
+    "origin_server_ts": 1690000000000,
+    "content": {
+      "m.relates_to": {
+        "rel_type": "m.annotation",
+        "event_id": "$target_event_id",
+        "key": "👍"
+      }
+    }
+  }
+}
+```
+The `key` field contains the emoji. The `event_id` in `m.relates_to` points to the reacted-to message.
+
+#### `m.room.redaction`
+```json
+{
+  "persona_id": "bot-1",
+  "event": {
+    "type": "m.room.redaction",
+    "sender": "@user:yourdomain.com",
+    "room_id": "!abc:yourdomain.com",
+    "event_id": "$redact012",
+    "origin_server_ts": 1690000000000,
+    "content": {
+      "reason": "Sent by mistake"
+    },
+    "redacts": "$deleted_event_id"
+  }
+}
+```
+The `redacts` field identifies the event that was deleted.
+
+#### `m.room.name`
+```json
+{
+  "persona_id": "bot-1",
+  "event": {
+    "type": "m.room.name",
+    "sender": "@admin:yourdomain.com",
+    "room_id": "!abc:yourdomain.com",
+    "event_id": "$name345",
+    "origin_server_ts": 1690000000000,
+    "content": {
+      "name": "New Room Name"
+    }
+  }
+}
+```
+
+#### `m.room.topic`
+```json
+{
+  "persona_id": "bot-1",
+  "event": {
+    "type": "m.room.topic",
+    "sender": "@admin:yourdomain.com",
+    "room_id": "!abc:yourdomain.com",
+    "event_id": "$topic678",
+    "origin_server_ts": 1690000000000,
+    "content": {
+      "topic": "Updated topic for this room"
+    }
+  }
+}
+```
+
+#### `m.room.power_levels`
+```json
+{
+  "persona_id": "bot-1",
+  "event": {
+    "type": "m.room.power_levels",
+    "sender": "@admin:yourdomain.com",
+    "room_id": "!abc:yourdomain.com",
+    "event_id": "$pl901",
+    "origin_server_ts": 1690000000000,
+    "content": {
+      "users": {
+        "@admin:yourdomain.com": 100,
+        "@user:yourdomain.com": 0
+      },
+      "events_default": 0,
+      "state_default": 50,
+      "ban": 50,
+      "kick": 50,
+      "invite": 0
+    }
+  }
+}
+```
 
 ---
 
